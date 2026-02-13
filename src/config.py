@@ -5,7 +5,7 @@ import argparse
 
 @dataclass
 class PipelineConfig:
-    input_video: Path
+    input_video: Path = Path("")
     output_video: Path | None = None
     output_data: Path | None = None
     model_path: Path = Path("models/face_landmarker_v2_with_blendshapes.task")
@@ -30,12 +30,22 @@ class PipelineConfig:
     # Preview
     show_preview: bool = True
 
+    # Streaming mode
+    stream_mode: bool = False
+    camera_id: int | None = None
+    livelink_host: str = "127.0.0.1"
+    livelink_port: int = 11111
+    livelink_subject: str = "PythonFace"
+
 
 def parse_args() -> PipelineConfig:
     parser = argparse.ArgumentParser(
         description="Facial expression detection with ARKit blendshape output"
     )
-    parser.add_argument("input_video", type=Path, help="Path to input video file")
+    parser.add_argument(
+        "input_video", type=Path, nargs="?", default=None,
+        help="Path to input video file (optional in --stream --camera mode)",
+    )
     parser.add_argument("-o", "--output-video", type=Path, default=None)
     parser.add_argument("-d", "--output-data", type=Path, default=None)
     parser.add_argument(
@@ -63,10 +73,29 @@ def parse_args() -> PipelineConfig:
         "--min-tracking-confidence", type=float, default=0.5
     )
 
+    # Streaming mode
+    parser.add_argument(
+        "--stream", action="store_true",
+        help="Enable streaming mode: send blendshapes to UE5 via Live Link",
+    )
+    parser.add_argument(
+        "--camera", type=int, default=None, metavar="ID",
+        help="Camera device ID for live capture (e.g. 0)",
+    )
+    parser.add_argument("--livelink-host", default="127.0.0.1")
+    parser.add_argument("--livelink-port", type=int, default=11111)
+    parser.add_argument("--livelink-subject", default="PythonFace")
+
     args = parser.parse_args()
 
+    # Validate: need either input_video or --camera in stream mode
+    if args.stream and args.input_video is None and args.camera is None:
+        parser.error("--stream requires either a video file or --camera ID")
+    if not args.stream and args.input_video is None:
+        parser.error("input_video is required (or use --stream --camera)")
+
     return PipelineConfig(
-        input_video=args.input_video,
+        input_video=args.input_video or Path(""),
         output_video=args.output_video,
         output_data=args.output_data,
         model_path=args.model_path,
@@ -81,4 +110,9 @@ def parse_args() -> PipelineConfig:
         top_n_blendshapes=args.top_n_blendshapes,
         export_format=args.export_format,
         show_preview=not args.no_preview,
+        stream_mode=args.stream,
+        camera_id=args.camera,
+        livelink_host=args.livelink_host,
+        livelink_port=args.livelink_port,
+        livelink_subject=args.livelink_subject,
     )
