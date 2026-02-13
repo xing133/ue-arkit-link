@@ -1,0 +1,26 @@
+flowchart LR
+    main --> config
+    main --> pipeline
+
+    pipeline --> config
+    pipeline --> detector
+    pipeline --> visualizer
+    pipeline --> exporter
+    pipeline --> model_manager
+    pipeline --> types
+
+    detector --> config
+    detector --> types
+
+    visualizer --> types
+
+    exporter --> types
+
+    style main fill:#4A90D9,color:#fff
+    style pipeline fill:#D94A4A,color:#fff
+    style config fill:#7B68EE,color:#fff
+    style detector fill:#E8963E,color:#fff
+    style visualizer fill:#E8963E,color:#fff
+    style exporter fill:#E8963E,color:#fff
+    style model_manager fill:#50C878,color:#fff
+    style types fill:#50C878,color:#fff

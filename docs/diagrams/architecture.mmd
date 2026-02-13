@@ -1,0 +1,47 @@
+flowchart TB
+    subgraph CLI["CLI 入口"]
+        main["main.py<br/>日志配置 + 参数校验"]
+        config["config.py<br/>PipelineConfig dataclass<br/>+ argparse CLI 解析"]
+    end
+
+    subgraph Core["核心处理流水线"]
+        pipeline["pipeline.py<br/>Pipeline 编排器"]
+        detector["detector.py<br/>FaceDetector<br/>MediaPipe FaceLandmarker"]
+        visualizer["visualizer.py<br/>FrameVisualizer<br/>面部网格 + 文字叠加 + 深度图"]
+        exporter["exporter.py<br/>DataExporter<br/>JSON / CSV 序列化"]
+    end
+
+    subgraph Infra["基础设施"]
+        model_mgr["model_manager.py<br/>模型自动下载 + 校验"]
+        types["types.py<br/>FrameResult, VideoMetadata"]
+    end
+
+    subgraph IO["输入 / 输出"]
+        video_in[("输入视频<br/>.mp4")]
+        video_out[("标注视频<br/>_annotated.mp4")]
+        data_out[("数据文件<br/>_blendshapes.json/.csv")]
+        preview["实时预览窗口<br/>cv2.imshow"]
+    end
+
+    subgraph Blender["Blender 端"]
+        blender_script["scripts/blender_import.py<br/>Shape Key 关键帧写入"]
+    end
+
+    main --> config
+    main --> pipeline
+    pipeline --> model_mgr
+    pipeline --> detector
+    pipeline --> visualizer
+    pipeline --> exporter
+
+    config -.-> pipeline
+    types -.-> detector
+    types -.-> visualizer
+    types -.-> exporter
+
+    video_in --> pipeline
+    pipeline --> video_out
+    pipeline --> data_out
+    pipeline --> preview
+
+    data_out --> blender_script

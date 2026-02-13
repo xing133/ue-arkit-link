@@ -1,0 +1,50 @@
+sequenceDiagram
+    participant User
+    participant Main as main.py
+    participant Cfg as config.py
+    participant Pipe as Pipeline
+    participant MM as ModelManager
+    participant Det as FaceDetector
+    participant Vis as FrameVisualizer
+    participant Exp as DataExporter
+    participant CV as OpenCV
+
+    User->>Main: uv run python -m src.main video.mp4
+    Main->>Cfg: parse_args()
+    Cfg-->>Main: PipelineConfig
+
+    Main->>Pipe: Pipeline(config).run()
+    Pipe->>MM: ensure_model(path)
+    MM-->>Pipe: model ready
+
+    Pipe->>CV: VideoCapture(video)
+    CV-->>Pipe: VideoMetadata (fps, w, h, frames)
+
+    Pipe->>Exp: set_metadata(metadata)
+    Pipe->>CV: VideoWriter(output_path)
+
+    rect rgb(40, 40, 60)
+    note over Pipe,CV: 逐帧循环
+    loop 每一帧
+        Pipe->>CV: cap.read()
+        CV-->>Pipe: bgr_frame
+
+        Pipe->>Det: detect_frame(bgr, idx, ts_ms)
+        Note over Det: BGR→RGB 转换<br/>mp.Image 封装<br/>detect_for_video()
+        Det-->>Pipe: FrameResult
+
+        Pipe->>Exp: add_frame(result)
+
+        Pipe->>Vis: annotate_frame(bgr, result)
+        Note over Vis: 绘制面部网格<br/>blendshape 文字叠加<br/>深度图侧边栏
+        Vis-->>Pipe: annotated_frame
+
+        Pipe->>CV: writer.write(annotated)
+        Pipe->>CV: imshow(annotated)
+    end
+    end
+
+    Pipe->>Exp: save(data_path)
+    Note over Exp: JSON 或 CSV 序列化
+    Pipe->>CV: release() + destroyAllWindows()
+    Pipe-->>Main: 完成
