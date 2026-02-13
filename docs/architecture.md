@@ -370,6 +370,138 @@ class PipelineConfig:
 
 **preview 交互**：`cv2.waitKey(1)` 监听 `q` 键，支持提前中断。中断时已处理的帧仍会完整导出。
 
+### 6.8 识别与可视化实现原理
+
+本节说明项目的核心定位：这是一个 **MediaPipe 的应用层封装**，而非底层算法实现。
+
+#### 识别部分的实现层次
+
+`detector.py` 是 MediaPipe FaceLandmarker 的薄封装层，核心检测逻辑只有 3 行代码：
+
+```python
+def detect_frame(self, bgr_frame: np.ndarray, frame_index: int, timestamp_ms: int) -> FrameResult:
+    # 1. BGR → RGB 颜色空间转换
+    rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+
+    # 2. 封装为 MediaPipe Image 对象
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+
+    # 3. 调用 MediaPipe 推理（核心）
+    result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
+
+    # 4. 格式转换（protobuf → Python dict/list）
+    return self._convert_result(result, frame_index, timestamp_ms)
+```
+
+**MediaPipe 一次推理输出的完整数据**：
+- **468 个 3D 关键点**：每个点包含 (x, y, z) 坐标，z 是相对深度
+- **52 个 ARKit blendshapes**：标准面部表情系数，范围 [0, 1]
+- **4×4 变换矩阵**：面部姿态（旋转 + 平移）
+
+`_convert_result()` 函数只做数据格式转换，不涉及任何算法计算：
+- 将 protobuf `NormalizedLandmarkList` 转为 Python `list[dict]`
+- 将 protobuf `ClassificationList` 转为 `dict[str, float]`
+- 提取 `transformation_matrix` 为 NumPy 数组
+
+**项目不包含的内容**：
+- ❌ 面部检测算法
+- ❌ 关键点定位算法
+- ❌ Blendshape 回归模型
+- ❌ 深度估计算法
+- ❌ 任何神经网络训练代码
+
+所有识别能力完全来自 MediaPipe 预训练模型（`face_landmarker_v2_with_blendshapes.task`）。
+
+#### 网格绘制的连接关系来源
+
+`visualizer.py` 中的面部网格绘制同样依赖 MediaPipe 预定义的连接关系常量：
+
+```python
+from mediapipe.tasks.python.vision.face_landmarker import FaceLandmarksConnections
+
+# MediaPipe 预定义的连接集（哪些点连哪些点）
+FACE_LANDMARKS_TESSELATION   # 约 800+ 条连线，密集三角网格
+FACE_LANDMARKS_CONTOURS      # 约 100+ 条连线，面部轮廓（眉/眼/嘴/脸颊）
+FACE_LANDMARKS_LEFT_IRIS     # 左虹膜圆圈（5 个点）
+FACE_LANDMARKS_RIGHT_IRIS    # 右虹膜圆圈（5 个点）
+```
+
+这些连接关系定义了 468 个关键点之间的拓扑结构，例如：
+- Tesselation：`[(0, 1), (1, 2), (2, 3), ...]` — 形成密集三角网格
+- Contours：`[(33, 133), (133, 173), ...]` — 勾勒眼睛、嘴巴等轮廓
+
+**绘制代码只负责调用 MediaPipe 的绘图工具**：
+
+```python
+# visualizer.py 中的核心绘制逻辑
+drawing_utils.draw_landmarks(
+    image=annotated_frame,
+    landmark_list=normalized_landmarks,  # 468 个点的坐标
+    connections=FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION,  # MediaPipe 预定义
+    landmark_drawing_spec=None,
+    connection_drawing_spec=drawing_styles.get_default_face_mesh_tesselation_style()
+)
+```
+
+**项目不包含的内容**：
+- ❌ 面部拓扑结构定义
+- ❌ 关键点连接关系计算
+- ❌ 网格生成算法
+
+所有网格连接关系由 MediaPipe 提供，项目代码只负责：
+1. 调用 `draw_landmarks()` 绘制网格
+2. 设置绘制样式（颜色、线宽、透明度）
+3. 叠加 blendshape 文字信息
+4. 拼接深度图侧边栏
+
+#### 深度图可视化原理
+
+`_draw_depth_sidebar()` 函数将 MediaPipe 输出的 Z 坐标可视化为伪彩色图：
+
+```python
+def _draw_depth_sidebar(self, frame: np.ndarray, landmarks: list[dict]) -> np.ndarray:
+    # 1. 提取所有关键点的 Z 坐标（MediaPipe 已输出）
+    z_values = [lm["z"] for lm in landmarks]
+
+    # 2. Min-Max 归一化到 [0, 255]
+    z_min, z_max = min(z_values), max(z_values)
+    normalized = [(z - z_min) / (z_max - z_min) * 255 for z in z_values]
+
+    # 3. 绘制到深度图画布
+    for i, lm in enumerate(landmarks):
+        x = int(lm["x"] * depth_width)
+        y = int(lm["y"] * depth_height)
+        cv2.circle(depth_map, (x, y), radius=2, color=int(normalized[i]), thickness=-1)
+
+    # 4. 应用伪彩色映射（INFERNO：黑→红→黄→白）
+    colored = cv2.applyColorMap(depth_map, cv2.COLORMAP_INFERNO)
+
+    # 5. 水平拼接到原始帧右侧
+    return np.hstack([frame, colored])
+```
+
+**关键点**：
+- 深度数据（Z 坐标）由 MediaPipe 模型直接输出，无需额外计算
+- 项目代码只做可视化映射：Z 值 → 灰度 → 伪彩色
+- 近处（Z 小）显示为亮色（黄/白），远处（Z 大）显示为暗色（黑/红）
+
+#### 项目的核心价值定位
+
+既然识别和网格绘制都依赖 MediaPipe，那么本项目的价值在哪里？
+
+**工程集成与格式转换**：
+1. **数据格式适配**：MediaPipe protobuf → Blender JSON/CSV → UE5 Live Link UDP
+2. **实时流式传输**：摄像头捕获 → 检测 → UDP 发送 → UE5 MetaHuman 实时驱动
+3. **可视化预览**：多层网格叠加 + blendshape 文字 + 深度图侧边栏
+4. **零配置体验**：模型自动下载、输出路径自动推导、命令行参数友好
+5. **多模式支持**：离线批处理（视频文件）+ 实时流式（摄像头）
+
+**类比**：
+- MediaPipe = 汽车发动机（核心算法）
+- 本项目 = 整车集成（方向盘、仪表盘、座椅、音响系统）
+
+用户需要的是"能开的车"，而非"单独的发动机"。本项目将 MediaPipe 的原始输出转化为可直接用于动画制作的数据流。
+
 ---
 
 ## 7. MediaPipe 0.10.32 API 要点（踩坑记录）
@@ -552,7 +684,176 @@ Timecode,BlendShapeCount,EyeBlinkLeft,EyeBlinkRight,...,TongueOut,HeadYaw,HeadPi
 
 ---
 
+## 9. UE5 Live Link 实时流式传输
+
+### 架构概览
+
+项目支持通过 **Live Link Face UDP 协议**将面部表情数据实时流式传输到 Unreal Engine 5，直接驱动 MetaHuman 角色动画。
+
+```
+摄像头/视频 → FaceDetector → LiveLinkSender → UDP:11111 → UE5 Live Link → MetaHuman
+                                    ↓
+                            本地预览窗口（可选）
+```
+
+### 核心模块
+
+#### 9.1 src/livelink.py — Live Link 发送器
+
+| 类/函数 | 作用 |
+|---------|------|
+| `LiveLinkSender` | 封装 PyLiveLinkFace + UDP socket，负责数据打包和发送 |
+| `send_frame(result)` | 接收 `FrameResult`，提取 52 个 blendshapes + 头部旋转，编码为 Live Link 二进制格式并通过 UDP 发送 |
+| `_rotation_matrix_to_euler()` | 从 4×4 变换矩阵提取 Euler 角（yaw, pitch, roll） |
+| `_BLENDSHAPE_MAP` | 动态构建的 camelCase → PascalCase 映射表（`eyeBlinkLeft` → `FaceBlendShape.EyeBlinkLeft`） |
+
+**关键实现细节**：
+- 使用 `PyLiveLinkFace` 库处理 Live Link Face 协议的二进制打包
+- 动态枚举映射：遍历 `FaceBlendShape` 枚举，自动生成 camelCase 查找表
+- 头部旋转提取：从变换矩阵的 3×3 旋转子矩阵分解 Euler 角，处理万向锁边界情况
+- `no_filter=True`：禁用平滑滤波，保持原始检测结果的响应速度
+
+#### 9.2 src/stream.py — 流式管线
+
+| 类/函数 | 作用 |
+|---------|------|
+| `StreamPipeline` | 实时流式处理管线，支持摄像头和视频文件输入 |
+| `run()` | 主循环：读帧 → 检测 → 发送 UDP → 可选预览 → 帧率统计 |
+
+**与离线管线的差异**：
+
+| 维度 | 离线管线 (`Pipeline`) | 流式管线 (`StreamPipeline`) |
+|------|---------------------|--------------------------|
+| 输入源 | 仅视频文件 | 摄像头 + 视频文件 |
+| 输出 | 标注视频 + JSON/CSV | UDP 数据流（无文件） |
+| 时间戳 | 基于视频帧率计算 | `time.monotonic_ns()` 实时时钟 |
+| 帧率控制 | 无（全速处理） | 摄像头 1ms / 视频按 FPS 延迟 |
+| 中断方式 | 视频结束 | 按 `q` 键或视频结束 |
+
+**帧率统计**：每 300 帧输出一次实际处理帧率，用于性能监控。
+
+### 使用方法
+
+#### 命令行参数
+
+```bash
+# 摄像头实时流式传输
+uv run python -m src.main --stream --camera 0
+
+# 视频文件流式传输（用于测试/演示）
+uv run python -m src.main --stream video.mp4
+
+# 指定远程 UE5 主机
+uv run python -m src.main --stream --camera 0 --livelink-host 192.168.1.100
+
+# 自定义端口和 Subject 名称
+uv run python -m src.main --stream --camera 0 --livelink-port 11111 --livelink-subject MyFace
+
+# 无预览窗口（降低 CPU 占用）
+uv run python -m src.main --stream --camera 0 --no-preview
+```
+
+#### 配置参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--stream` | False | 启用流式模式 |
+| `--camera ID` | None | 摄像头设备 ID（0 = 默认摄像头） |
+| `--livelink-host` | 127.0.0.1 | UE5 主机 IP |
+| `--livelink-port` | 11111 | UDP 端口（Live Link Face 标准端口） |
+| `--livelink-subject` | PythonFace | Subject 名称（UE5 中用于识别数据源） |
+
+### UE5 接收端配置
+
+#### 步骤 1：启用插件
+
+Edit → Plugins，确认以下插件已启用：
+- **Live Link**
+- **Apple ARKit Face Support**（如果有）
+
+重启编辑器。
+
+#### 步骤 2：配置 Live Link Source
+
+1. 打开 **Window → Live Link**
+2. UE5 会自动监听 UDP 端口 11111
+3. 启动 Python 流式传输后，Live Link 面板中会出现 "PythonFace" Subject（绿色表示正在接收数据）
+
+**网络检查**：
+- 同一台机器：无需配置，使用 127.0.0.1
+- 局域网：确保防火墙放行 UDP 11111 端口
+- 测试连通性：`nc -u <UE5_IP> 11111`
+
+#### 步骤 3：绑定 MetaHuman
+
+**方法 A：直接设置（推荐）**
+
+1. 在关卡中选中 MetaHuman Actor
+2. Details 面板 → Face 组件
+3. 找到 **Live Link Subject Name**，填入 `PythonFace`
+4. 确保 **Animation Mode** 设为 `Live Link` 或 `Use Animation Blueprint`
+
+**方法 B：通过 AnimBP**
+
+1. 打开 MetaHuman 的 Face AnimBP（通常在 `Content/MetaHumans/<Name>/Face/`）
+2. 在 AnimGraph 中添加 **Live Link Pose** 节点
+3. 设置 Subject Name 为 `PythonFace`
+4. 连接到 Output Pose
+
+#### 步骤 4：测试
+
+1. 先启动 UE5 并打开 Live Link 面板
+2. 运行 Python 流式传输：
+   ```bash
+   uv run python -m src.main --stream --camera 0
+   ```
+3. 观察：
+   - Live Link 面板中 "PythonFace" 变绿
+   - MetaHuman 面部开始跟随摄像头中的表情动作
+
+### 常见问题
+
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| Live Link 面板看不到 Subject | 网络不通或端口被占用 | 检查防火墙，确认端口 11111 未被占用 |
+| Subject 显示黄色/红色 | 数据格式错误或帧率不匹配 | 检查 Python 端日志，确认 MediaPipe 检测正常 |
+| MetaHuman 不动 | AnimBP 未绑定或 Subject 名称不匹配 | 确认 Live Link Subject Name 与 Python 端 `--livelink-subject` 一致 |
+| 延迟明显 | 网络延迟或检测性能瓶颈 | 使用本地 127.0.0.1，关闭预览窗口（`--no-preview`） |
+| 摄像头打不开 | 设备 ID 错误或被占用 | 尝试 `--camera 1` 或 `--camera 2`，关闭其他占用摄像头的程序 |
+
+### 技术细节
+
+#### Live Link Face 协议
+
+- **传输层**：UDP（无连接，低延迟）
+- **端口**：11111（社区标准）或 14785（UE5 MetaHuman 官方文档提及）
+- **数据格式**：二进制打包，包含：
+  - 52 个 ARKit blendshape 系数（float32，0-1 范围）
+  - 头部旋转（HeadYaw, HeadPitch, HeadRoll，弧度制）
+  - 时间戳和帧序号
+
+#### 性能优化
+
+| 优化点 | 实现方式 | 效果 |
+|--------|----------|------|
+| 无文件 I/O | 流式模式不写入视频和数据文件 | 减少磁盘开销 |
+| 单调时钟 | `time.monotonic_ns()` 避免系统时间跳变 | 满足 MediaPipe VIDEO 模式要求 |
+| 可选预览 | `--no-preview` 跳过 OpenCV 绘制和显示 | 降低 20-30% CPU 占用 |
+| UDP 无确认 | 不等待 UE5 响应，fire-and-forget | 最小化网络延迟 |
+
+#### 端口配置说明
+
+文档中提到两个端口：
+- **11111**：Live Link Face iOS app 和社区工具的标准端口，PyLiveLinkFace 默认端口
+- **14785**：UE5 官方文档中提及的 MetaHuman Live Link Face 端口
+
+**建议**：优先使用 11111（本项目默认），如遇问题可尝试 `--livelink-port 14785`。不同 UE5 版本可能监听不同端口。
+
+---
+
 ## 附录：快速命令参考
+
+### 离线处理模式
 
 ```bash
 # 基础运行（带预览）
@@ -569,4 +870,23 @@ uv run python -m src.main video.mp4 -o result.mp4 -d result.json
 
 # 极简可视化（仅轮廓，无网格/虹膜/文字）
 uv run python -m src.main video.mp4 --no-tesselation --no-irises --no-blendshapes
+```
+
+### 实时流式传输模式
+
+```bash
+# 摄像头 → UE5 实时流式传输
+uv run python -m src.main --stream --camera 0
+
+# 视频文件流式传输（测试用）
+uv run python -m src.main --stream video.mp4
+
+# 远程 UE5 主机
+uv run python -m src.main --stream --camera 0 --livelink-host 192.168.1.100
+
+# 无预览（性能优化）
+uv run python -m src.main --stream --camera 0 --no-preview
+
+# 自定义端口和 Subject
+uv run python -m src.main --stream --camera 0 --livelink-port 14785 --livelink-subject MyCharacter
 ```
