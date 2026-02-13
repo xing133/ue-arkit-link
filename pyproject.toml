@@ -1,0 +1,13 @@
+[project]
+name = "expression-detect"
+version = "0.1.0"
+description = "Facial expression detection with ARKit-compatible blendshape output for Blender"
+requires-python = ">=3.12"
+dependencies = [
+    "mediapipe>=0.10.14",
+    "opencv-python>=4.9.0",
+    "numpy>=1.24.0",
+]
+
+[project.scripts]
+expression-detect = "src.main:main"
