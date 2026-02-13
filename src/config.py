@@ -30,6 +30,16 @@ class PipelineConfig:
     # Preview
     show_preview: bool = True
 
+    # Body tracking
+    enable_body: bool = False
+    pose_model: str = "heavy"  # lite / full / heavy
+    pose_model_path: Path = Path("models/pose_landmarker_heavy.task")
+
+    # Hand tracking
+    enable_hands: bool = False
+    num_hands: int = 2
+    hand_model_path: Path = Path("models/hand_landmarker.task")
+
     # Streaming mode
     stream_mode: bool = False
     camera_id: int | None = None
@@ -86,6 +96,21 @@ def parse_args() -> PipelineConfig:
     parser.add_argument("--livelink-port", type=int, default=11111)
     parser.add_argument("--livelink-subject", default="PythonFace")
 
+    # Body & hand tracking
+    parser.add_argument(
+        "--enable-body", action="store_true",
+        help="Enable body pose tracking (33 landmarks)",
+    )
+    parser.add_argument(
+        "--enable-hands", action="store_true",
+        help="Enable hand tracking (21 landmarks per hand)",
+    )
+    parser.add_argument(
+        "--pose-model", choices=["lite", "full", "heavy"], default="heavy",
+        help="Pose model variant: lite (fast), full (balanced), heavy (accurate, default)",
+    )
+    parser.add_argument("--num-hands", type=int, default=2, choices=[1, 2])
+
     args = parser.parse_args()
 
     # Validate: need either input_video or --camera in stream mode
@@ -93,6 +118,11 @@ def parse_args() -> PipelineConfig:
         parser.error("--stream requires either a video file or --camera ID")
     if not args.stream and args.input_video is None:
         parser.error("input_video is required (or use --stream --camera)")
+
+    # Resolve pose model path based on variant
+    pose_model_key = f"pose_{args.pose_model}"
+    from src.model_manager import MODELS
+    pose_filename = MODELS[pose_model_key]["filename"]
 
     return PipelineConfig(
         input_video=args.input_video or Path(""),
@@ -110,6 +140,12 @@ def parse_args() -> PipelineConfig:
         top_n_blendshapes=args.top_n_blendshapes,
         export_format=args.export_format,
         show_preview=not args.no_preview,
+        enable_body=args.enable_body,
+        pose_model=args.pose_model,
+        pose_model_path=Path(f"models/{pose_filename}"),
+        enable_hands=args.enable_hands,
+        num_hands=args.num_hands,
+        hand_model_path=Path("models/hand_landmarker.task"),
         stream_mode=args.stream,
         camera_id=args.camera,
         livelink_host=args.livelink_host,

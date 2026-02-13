@@ -14,6 +14,13 @@ class FrameResult:
     blendshapes: list[dict[str, float]]
     # Per-face 4x4 facial transformation matrix
     transformation_matrix: list[np.ndarray | None]
+    # Body pose (33 landmarks)
+    pose_landmarks: list[dict[str, float]] | None = None
+    pose_world_landmarks: list[dict[str, float]] | None = None
+    # Hands (up to 2 hands, 21 landmarks each)
+    hand_landmarks: list[list[dict[str, float]]] | None = None
+    hand_world_landmarks: list[list[dict[str, float]]] | None = None
+    handedness: list[str] | None = None
 
 
 @dataclass

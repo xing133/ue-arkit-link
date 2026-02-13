@@ -94,6 +94,38 @@ class DataExporter:
 
                 frame_data["faces"].append(face)
 
+            # Body pose landmarks
+            if fr.pose_landmarks:
+                frame_data["pose_landmarks"] = [
+                    {"x": round(lm["x"], 6), "y": round(lm["y"], 6), "z": round(lm["z"], 6)}
+                    for lm in fr.pose_landmarks
+                ]
+            if fr.pose_world_landmarks:
+                frame_data["pose_world_landmarks"] = [
+                    {"x": round(lm["x"], 6), "y": round(lm["y"], 6), "z": round(lm["z"], 6)}
+                    for lm in fr.pose_world_landmarks
+                ]
+
+            # Hand landmarks
+            if fr.hand_landmarks:
+                frame_data["hand_landmarks"] = [
+                    [
+                        {"x": round(lm["x"], 6), "y": round(lm["y"], 6), "z": round(lm["z"], 6)}
+                        for lm in hand
+                    ]
+                    for hand in fr.hand_landmarks
+                ]
+            if fr.hand_world_landmarks:
+                frame_data["hand_world_landmarks"] = [
+                    [
+                        {"x": round(lm["x"], 6), "y": round(lm["y"], 6), "z": round(lm["z"], 6)}
+                        for lm in hand
+                    ]
+                    for hand in fr.hand_world_landmarks
+                ]
+            if fr.handedness:
+                frame_data["handedness"] = fr.handedness
+
             data["frames"].append(frame_data)
 
         with open(path, "w") as f:

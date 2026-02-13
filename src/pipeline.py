@@ -1,10 +1,11 @@
 import logging
+from contextlib import ExitStack
 from pathlib import Path
 
 import cv2
 
 from src.config import PipelineConfig
-from src.detector import FaceDetector
+from src.detector import FaceDetector, PoseDetector, HandDetector
 from src.exporter import DataExporter
 from src.model_manager import ensure_model
 from src.types import VideoMetadata
@@ -22,8 +23,12 @@ class Pipeline:
         self._config = config
 
     def run(self) -> None:
-        # Ensure model is downloaded
+        # Ensure models are downloaded
         ensure_model(self._config.model_path)
+        if self._config.enable_body:
+            ensure_model(self._config.pose_model_path, f"pose_{self._config.pose_model}")
+        if self._config.enable_hands:
+            ensure_model(self._config.hand_model_path, "hand")
 
         # Open input video
         cap = cv2.VideoCapture(str(self._config.input_video))
@@ -68,7 +73,11 @@ class Pipeline:
 
         interrupted = False
 
-        with FaceDetector(self._config) as detector:
+        with ExitStack() as stack:
+            face_det = stack.enter_context(FaceDetector(self._config))
+            pose_det = stack.enter_context(PoseDetector(self._config)) if self._config.enable_body else None
+            hand_det = stack.enter_context(HandDetector(self._config)) if self._config.enable_hands else None
+
             frame_index = 0
             while True:
                 ret, bgr_frame = cap.read()
@@ -77,8 +86,21 @@ class Pipeline:
 
                 timestamp_ms = int(frame_index * 1000 / metadata.fps)
 
-                # Detect
-                result = detector.detect_frame(bgr_frame, frame_index, timestamp_ms)
+                # Face detection
+                result = face_det.detect_frame(bgr_frame, frame_index, timestamp_ms)
+
+                # Body pose detection
+                if pose_det:
+                    pose_result = pose_det.detect_frame(bgr_frame, timestamp_ms)
+                    result.pose_landmarks = pose_result.landmarks
+                    result.pose_world_landmarks = pose_result.world_landmarks
+
+                # Hand detection
+                if hand_det:
+                    hand_result = hand_det.detect_frame(bgr_frame, timestamp_ms)
+                    result.hand_landmarks = hand_result.landmarks
+                    result.hand_world_landmarks = hand_result.world_landmarks
+                    result.handedness = hand_result.handedness
 
                 # Export
                 exporter.add_frame(result)

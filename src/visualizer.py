@@ -4,6 +4,8 @@ import mediapipe as mp
 from mediapipe.tasks.python.components.containers.landmark import NormalizedLandmark
 from mediapipe.tasks.python.vision import drawing_utils, drawing_styles
 from mediapipe.tasks.python.vision.face_landmarker import FaceLandmarksConnections
+from mediapipe.tasks.python.vision.pose_landmarker import PoseLandmarksConnections
+from mediapipe.tasks.python.vision.hand_landmarker import HandLandmarksConnections
 
 from src.types import FrameResult
 
@@ -72,6 +74,14 @@ class FrameVisualizer:
         # Blendshape text overlay (first face only)
         if self._show_bs and result.blendshapes:
             annotated = self._draw_blendshape_overlay(annotated, result.blendshapes[0])
+
+        # Body pose skeleton
+        if result.pose_landmarks:
+            annotated = self._draw_pose_skeleton(annotated, result.pose_landmarks)
+
+        # Hand skeletons
+        if result.hand_landmarks:
+            annotated = self._draw_hand_skeletons(annotated, result.hand_landmarks, result.handedness)
 
         # Depth sidebar
         if self._show_depth and result.landmarks:
@@ -150,3 +160,58 @@ class FrameVisualizer:
         depth_bgr[mask] = [0, 0, 0]
 
         return np.hstack([frame, depth_bgr])
+
+    def _draw_pose_skeleton(
+        self, frame: np.ndarray, pose_landmarks: list[dict[str, float]]
+    ) -> np.ndarray:
+        """Draw body pose skeleton (33 landmarks) in blue."""
+        lm_list = self._to_normalized_landmarks(pose_landmarks)
+
+        # Custom blue style for body
+        landmark_style = mp.solutions.drawing_utils.DrawingSpec(
+            color=(255, 100, 0), thickness=2, circle_radius=3
+        )
+        connection_style = mp.solutions.drawing_utils.DrawingSpec(
+            color=(255, 150, 0), thickness=2
+        )
+
+        drawing_utils.draw_landmarks(
+            image=frame,
+            landmark_list=lm_list,
+            connections=PoseLandmarksConnections.POSE_LANDMARKS,
+            landmark_drawing_spec=landmark_style,
+            connection_drawing_spec=connection_style,
+        )
+        return frame
+
+    def _draw_hand_skeletons(
+        self, frame: np.ndarray, hand_landmarks: list[list[dict[str, float]]], handedness: list[str] | None
+    ) -> np.ndarray:
+        """Draw hand skeletons (21 landmarks each) in red/orange."""
+        for i, hand in enumerate(hand_landmarks):
+            lm_list = self._to_normalized_landmarks(hand)
+
+            # Different colors for left/right hands
+            if handedness and i < len(handedness):
+                if handedness[i] == "Left":
+                    color = (0, 100, 255)  # Orange for left
+                else:
+                    color = (0, 0, 255)    # Red for right
+            else:
+                color = (0, 50, 255)       # Default red-orange
+
+            landmark_style = mp.solutions.drawing_utils.DrawingSpec(
+                color=color, thickness=2, circle_radius=2
+            )
+            connection_style = mp.solutions.drawing_utils.DrawingSpec(
+                color=color, thickness=2
+            )
+
+            drawing_utils.draw_landmarks(
+                image=frame,
+                landmark_list=lm_list,
+                connections=HandLandmarksConnections.HAND_CONNECTIONS,
+                landmark_drawing_spec=landmark_style,
+                connection_drawing_spec=connection_style,
+            )
+        return frame
